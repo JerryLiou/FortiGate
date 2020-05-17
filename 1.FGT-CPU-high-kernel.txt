@@ -1,0 +1,115 @@
+// 排错及收集信息
+
+# the latest configuration
+# exec tac report  ** 1.不要在console下运行，2.如果session数量太多，谨慎执行该命令
+# topology
+
+# get hardware status
+# get system status
+# get system performance status
+# diagnose npu np6 port-list
+# diagnose debug crashlog read
+# diagnose debug crashlog interval 0
+
+# diagnose hardware sysinfo interrupts  ** 输出的最后一列可以看出某个np6的收发流量被哪些CPU core处理。
+比如，表示np6_0 的收发流量都分担到cpu5,6,8,9
+np6_0-tx-rx5,  ** cpu5
+np6_0-tx-rx6,  ** cpu6
+np6_0-tx-rx8,  ** cpu8   
+np6_0-tx-rx9,  ** cpu9
+
+以上信息帮助我们理解为什么接口/NP6关联的情况下，总是只有几个CPU usage high，其他的CPU usage 却为0
+
+# diagnose sys profile 
+start      start kernel profiling data
+stop       copy kernel profiling data
+show       show kernel profiling result
+sysmap     show kernel sysmap
+cpumask    profile which CPUs
+module     show kernel module
+
+其中这2条命令的输出信息是不会变的，分别执行一次即可
+# diagnose sys profile sysmap
+# diagnose sys profile module
+
+这3条命令的组合执行
+# diagnose sys profile start  ** start执行后等20秒，执行stop
+# diagnose sys profile stop   
+# diagnose sys profile show order  ** 一定要stop后，执行show order
+
+比如该输出中，靠前多次出现nturbo，说明是IPS导致CPU高的情况。
+# diagnose sys profile show order 
+0xffffffff802089ca:		    244177   poll_idle+0x1a/0x30
+0xffffffff80264a76:		       403   __do_softirq+0x66/0x150
+0xffffffff805fc1dc:		        95   system_call_after_swapgs+0x1c/0x65
+0xffffffff80254cd6:		        59   finish_task_switch+0x46/0xb0
+0xffffffffa0217ded:		        54   cp9_ipsa_eng_pgm+0xccd/0x1240
+0xffffffffa02089c5:		        43   np6_nturbo_clean_rx+0x1e5/0x450
+0xffffffffa02090d5:		        37   np6_hif_nturbo_ring_xmit_tbuf+0x285/0x630
+0xffffffff80307750:		        34   fsnotify+0x2c0/0x3d0
+0xffffffff802d1a0c:		        30   vfs_read+0x5c/0x150
+0xffffffffa00d7b03:		        29   nturbo_intf_user_recv_pkts+0xa3/0x1c0
+0xffffffffa00d89dd:		        28   _nturbo_notify+0x2ad/0x6b0
+0xffffffff802d31d8:		        24   fget_light+0x98/0xc0
+0xffffffffa020b22d:		        23   np6_hw_nturbo_irq_init+0x1fd/0x340
+0xffffffff8030a34e:		        22   ep_scan_ready_list.isra.2+0x14e/0x1f0
+
+可以限定到某个CPU core，观察某个CPU usage高的原因
+比如需要观察CPU30 usage为什么高
+# diagnose sys profile cpumask 30  ** 十进制30，对应get system performance status的CPU30，如果用16进制0x换算，比较麻烦。
+CPU30 states: 27% user 11% system 0% nice 62% idle 0% iowait 0% irq 0% softirq
+# diagnose sys profile start  ** start执行后等1分钟，执行stop
+# diagnose sys profile stop   
+# diagnose sys profile show order  ** 一定要stop后，执行show order
+
+这条是隐藏命令。当CPU core的kernel usage超过50%时，批量执行start，stop，show order的输出。
+# diagnose sys profile report
+
+
+
+错误配置导致CPU高
+
+    edit "port3"
+        set vdom "firewall"
+        set ip 130.195.196.49 255.255.255.248
+        set allowaccess ping
+        set type physical
+        set alias "External_port3"
+        set device-identification enable ===> this will turn off NTurbo
+        set role wan
+        set snmp-index 3
+    next
+
+// P.S. diagnose sys profile cpumask 缺省时统计每个CPU core的运行状态
+设备重启，从未执行过 diagnose sys profile start观察 cpumask
+# diagnose sys profile cpumask 
+0x0
+
+执行过diagnose sys profile start，stop，show order后观察，说明缺省是全部CPU core
+# diagnose sys profile cpumask
+0xffffffff,ffffffff
+
+
+------------ additional
+
+https://mantis.fortinet.com/bug_view_page.php?bug_id=0619324
+Please collect the following information:
+1. diag sys mpstat(One instance is ok)
+2. fnsysctl cat /proc/net/ptype
+3. fnsysctl cat /proc/net/softnet_stat
+2~3 seconds later, run Step 2 and 3 again.
+
+
+// caused by vlan accounting issue
+https://mantis.fortinet.com/bug_view_page.php?bug_id=0623557
+FortiGate-3700D (global) # diagnose sys profile show order
+0xffffffffa03f10d9: 211 _bcm_rlink_thread+0x3cf/0x57a
+0xffffffff805ec05a: 34 __schedule+0x2aa/0x8f0
+0xffffffff8020899c: 15 poll_idle+0x1c/0x30
+0xffffffffa02ce999: 6 bcm_gen_vlan_stats_thread+0x65/0x1be
+0xffffffff805ec960: 4 yield+0x20/0x30
+0xffffffff80207d32: 3 read_tsc+0x2/0x20
+0xffffffff8027fafa: 2 down_interruptible+0x1a/0x50
+0xffffffff80282b78: 1 getrawmonotonic+0x98/0xb0
+0xffffffff8027fa5e: 1 down_trylock+0xe/0x30
+0xffffffff80299e12: 1 rcu_sched_qs+0x12/0x20
